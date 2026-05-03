@@ -1,0 +1,36 @@
+[workspace]
+members = [
+    "crates/utils",
+    "crates/data",
+    "crates/tokenization",
+    "crates/model",
+    "crates/training",
+    "crates/adapter",
+    "crates/serving",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "DOSL-IIE-1.0"
+version = "0.1.0"
+authors = ["Dust LLC and Contributors"]
+repository = "https://github.com/dust-llc/aionfm"
+
+[workspace.dependencies]
+aionfm-adapter = { path = "crates/adapter" }
+aionfm-data = { path = "crates/data" }
+aionfm-model = { path = "crates/model" }
+aionfm-serving = { path = "crates/serving" }
+aionfm-tokenization = { path = "crates/tokenization" }
+aionfm-training = { path = "crates/training" }
+aionfm-utils = { path = "crates/utils" }
+
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }

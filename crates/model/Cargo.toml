@@ -1,0 +1,15 @@
+[package]
+name = "aionfm-model"
+description = "Core AionFM model contracts, modules, and baseline implementation."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+aionfm-tokenization.workspace = true
+aionfm-utils.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+tracing.workspace = true

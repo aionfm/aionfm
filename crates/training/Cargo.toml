@@ -1,0 +1,17 @@
+[package]
+name = "aionfm-training"
+description = "Training orchestration and objective skeleton for AionFM."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+aionfm-data.workspace = true
+aionfm-model.workspace = true
+aionfm-tokenization.workspace = true
+aionfm-utils.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+tracing.workspace = true

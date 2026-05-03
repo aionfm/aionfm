@@ -1,0 +1,16 @@
+[package]
+name = "aionfm-serving"
+description = "Inference engine, scenario sampler, and monitoring skeleton for AionFM."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+aionfm-adapter.workspace = true
+aionfm-model.workspace = true
+aionfm-utils.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "aionfm-utils"
+description = "Shared contracts, errors, and validation for AionFM."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
