@@ -229,7 +229,7 @@ pub struct ModelDescriptor {
     pub supported_frequencies: Vec<Frequency>,
 }
 
-/// Model adaptation request placeholder for adapter workflows.
+/// Model adaptation request for adapter workflows.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdaptationRequest {
     pub domain: String,

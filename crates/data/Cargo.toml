@@ -1,6 +1,6 @@
 [package]
 name = "aionfm-data"
-description = "Data ingestion, normalization, patching, and streaming skeleton for AionFM."
+description = "Data ingestion, normalization, patching, and streaming for AionFM."
 edition.workspace = true
 license.workspace = true
 version.workspace = true
@@ -10,6 +10,10 @@ repository.workspace = true
 [dependencies]
 aionfm-utils.workspace = true
 async-trait.workspace = true
+csv.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

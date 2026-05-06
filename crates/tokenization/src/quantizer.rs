@@ -16,7 +16,7 @@ pub trait Quantizer: Send + Sync {
     fn vocabulary(&self) -> &RegimeVocabulary;
 }
 
-/// Simple nearest-centroid quantizer used as a deterministic skeleton.
+/// Simple nearest-centroid quantizer used as a deterministic baseline.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CodebookQuantizer {
     vocabulary: RegimeVocabulary,

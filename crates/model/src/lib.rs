@@ -1,4 +1,4 @@
-//! Model layer skeleton for the dual-stream AionFM architecture.
+//! Model layer for the dual-stream AionFM architecture.
 
 pub mod attention;
 pub mod config;

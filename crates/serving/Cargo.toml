@@ -1,6 +1,6 @@
 [package]
 name = "aionfm-serving"
-description = "Inference engine, scenario sampler, and monitoring skeleton for AionFM."
+description = "Inference engine, scenario sampler, and monitoring for AionFM."
 edition.workspace = true
 license.workspace = true
 version.workspace = true

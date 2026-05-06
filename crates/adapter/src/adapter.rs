@@ -27,7 +27,7 @@ pub trait DomainAdapter: Send + Sync {
     fn transform_hidden(&self, hidden: &[f32]) -> AionResult<Vec<f32>>;
 }
 
-/// No-op bottleneck adapter skeleton.
+/// No-op bottleneck adapter used until a tensor backend owns adapter weights.
 #[derive(Clone, Debug)]
 pub struct BottleneckAdapter {
     config: AdapterConfig,

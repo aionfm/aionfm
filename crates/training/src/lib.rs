@@ -1,4 +1,4 @@
-//! Training layer skeleton for objectives, trainers, checkpoints, and synthetic data.
+//! Training layer for objectives, trainers, checkpoints, and synthetic data.
 
 pub mod checkpoint;
 pub mod losses;

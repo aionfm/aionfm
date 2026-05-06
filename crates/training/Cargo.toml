@@ -1,6 +1,6 @@
 [package]
 name = "aionfm-training"
-description = "Training orchestration and objective skeleton for AionFM."
+description = "Training orchestration and objective contracts for AionFM."
 edition.workspace = true
 license.workspace = true
 version.workspace = true

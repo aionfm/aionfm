@@ -1,3 +1,4 @@
+use crate::MissingPolicy;
 use aionfm_utils::{AionError, AionResult, ObservationMask, ValuePatch};
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +9,8 @@ pub struct PatchConfig {
     pub stride: usize,
     #[serde(default)]
     pub drop_incomplete: bool,
+    #[serde(default)]
+    pub missing_policy: MissingPolicy,
 }
 
 impl Default for PatchConfig {
@@ -16,6 +19,7 @@ impl Default for PatchConfig {
             patch_len: 32,
             stride: 16,
             drop_incomplete: true,
+            missing_policy: MissingPolicy::Preserve,
         }
     }
 }
@@ -50,9 +54,9 @@ impl PatchGenerator {
             if self.config.drop_incomplete && end - start < self.config.patch_len {
                 break;
             }
-            let mut patch_values = values[start..end].to_vec();
-            let mut observed: Vec<bool> =
-                patch_values.iter().map(|value| value.is_finite()).collect();
+            let treatment = self.config.missing_policy.apply(&values[start..end]);
+            let mut patch_values = treatment.values;
+            let mut observed = treatment.observed;
             if !self.config.drop_incomplete && patch_values.len() < self.config.patch_len {
                 let missing = self.config.patch_len - patch_values.len();
                 patch_values.extend(std::iter::repeat(0.0).take(missing));
@@ -80,6 +84,7 @@ mod tests {
             patch_len: 4,
             stride: 2,
             drop_incomplete: true,
+            missing_policy: MissingPolicy::Preserve,
         })
         .unwrap();
         let patches = generator.generate("entity", &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);

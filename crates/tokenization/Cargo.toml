@@ -1,6 +1,6 @@
 [package]
 name = "aionfm-tokenization"
-description = "Residual descriptor extraction and regime tokenization skeleton for AionFM."
+description = "Residual descriptor extraction and regime tokenization for AionFM."
 edition.workspace = true
 license.workspace = true
 version.workspace = true

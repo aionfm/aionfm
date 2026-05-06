@@ -1,6 +1,6 @@
 [package]
 name = "aionfm-adapter"
-description = "Domain adaptation, adapter registry, and calibration skeleton for AionFM."
+description = "Domain adaptation, adapter registry, and calibration for AionFM."
 edition.workspace = true
 license.workspace = true
 version.workspace = true

@@ -1,4 +1,4 @@
-//! Adaptation layer skeleton for domain adapters, calibration, and workflows.
+//! Adaptation layer for domain adapters, calibration, and workflows.
 
 pub mod adapter;
 pub mod calibration;
