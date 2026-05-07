@@ -1,5 +1,7 @@
+use crate::{enforce_quantile_monotonicity, merge_reports, ConstraintProjector};
 use aionfm_utils::{
-    EntityForecast, Explanation, ForecastEntity, ForecastOptions, Frequency, PredictionInterval,
+    DistributionForecast, EntityForecast, Explanation, ForecastConstraints, ForecastDecomposition,
+    ForecastEntity, ForecastOptions, Frequency, PredictionInterval, RegimeStep,
 };
 use std::collections::BTreeMap;
 
@@ -25,11 +27,18 @@ impl ForecastHeads {
         entity: &ForecastEntity,
         options: &ForecastOptions,
     ) -> EntityForecast {
-        let values = finite_values(&entity.historical_values);
+        let imputation = impute_history(&entity.historical_values);
+        let values = finite_values(&imputation.values);
         let profile = SeriesProfile::from_values(&values, &entity.frequency);
-        let mut point_forecast = profile.point_forecast(options.horizon);
-        if options.enforce_constraints && values.iter().all(|value| *value >= 0.0) {
-            clamp_nonnegative(&mut point_forecast);
+        let decomposition = profile.decomposition(options.horizon);
+        let mut point_forecast = sum_decomposition(&decomposition);
+        let projection = build_projection(options, &values);
+        let projector = projection
+            .as_ref()
+            .map(|constraints| ConstraintProjector::new(constraints.clone()));
+        let mut reports = Vec::new();
+        if let Some(projector) = &projector {
+            reports.push(projector.project(&mut point_forecast, "point_forecast"));
         }
         let mut quantiles = BTreeMap::new();
         for quantile in &options.quantiles {
@@ -42,24 +51,43 @@ impl ForecastHeads {
                     point + score * profile.residual_scale * horizon_scale
                 })
                 .collect::<Vec<_>>();
-            if options.enforce_constraints && values.iter().all(|value| *value >= 0.0) {
-                clamp_nonnegative(&mut forecast);
+            if let Some(projector) = &projector {
+                reports.push(
+                    projector.project(&mut forecast, &format!("quantile_{}", quantile.key())),
+                );
             }
             quantiles.insert(quantile.key(), forecast);
         }
-        let prediction_intervals =
-            profile.prediction_intervals(&point_forecast, options.enforce_constraints);
+        enforce_quantile_monotonicity(&mut quantiles);
+        let mut prediction_intervals = profile.prediction_intervals(&point_forecast);
+        if let Some(projector) = &projector {
+            for (coverage, interval) in &mut prediction_intervals {
+                reports.push(
+                    projector.project(&mut interval.lower, &format!("interval_{coverage}_lower")),
+                );
+                reports.push(
+                    projector.project(&mut interval.upper, &format!("interval_{coverage}_upper")),
+                );
+            }
+        }
         let scenario_paths = options.return_scenarios.then(|| {
-            profile.scenarios(
-                &point_forecast,
-                options.scenario_count.unwrap_or(8),
-                options.enforce_constraints,
-            )
+            let mut scenarios =
+                profile.scenarios(&point_forecast, options.scenario_count.unwrap_or(8));
+            if let Some(projector) = &projector {
+                for (index, scenario) in scenarios.iter_mut().enumerate() {
+                    reports.push(projector.project(scenario, &format!("scenario_{index}")));
+                }
+            }
+            scenarios
         });
         let regime_probabilities = options
             .return_regimes
             .then(|| profile.regime_probabilities());
+        let regime_timeline = options
+            .return_regimes
+            .then(|| profile.regime_timeline(options.horizon));
         let current_regime = profile.primary_regime();
+        let constraint_report = merge_reports(reports);
         EntityForecast {
             entity_id: entity.entity_id.clone(),
             forecast_horizon: options.horizon,
@@ -68,8 +96,13 @@ impl ForecastHeads {
             point_forecast,
             quantiles,
             prediction_intervals,
+            decomposition: Some(decomposition),
+            distribution: Some(profile.distribution(options.horizon)),
+            imputed_history: imputation.has_missing.then_some(imputation.values),
             scenario_paths,
             regime_probabilities,
+            regime_timeline,
+            constraint_report,
             explanation: Some(Explanation {
                 current_regime: Some(current_regime),
                 uncertainty_driver: Some(profile.uncertainty_driver()),
@@ -92,6 +125,7 @@ struct SeriesProfile {
     residual_scale: f32,
     seasonal_offsets: Vec<f32>,
     volatility_ratio: f32,
+    event_impulse: f32,
 }
 
 impl SeriesProfile {
@@ -109,6 +143,7 @@ impl SeriesProfile {
             .max(1e-3);
         let seasonal_offsets = estimate_seasonal_offsets(&values, seasonal_period(frequency));
         let volatility_ratio = residual_scale / mean.abs().max(1.0);
+        let event_impulse = estimate_event_impulse(&values, slope, residual_scale);
         Self {
             values,
             last_value,
@@ -116,30 +151,33 @@ impl SeriesProfile {
             residual_scale,
             seasonal_offsets,
             volatility_ratio,
+            event_impulse,
         }
     }
 
-    fn point_forecast(&self, horizon: usize) -> Vec<f32> {
-        (0..horizon)
-            .map(|step| {
-                let seasonal = if self.seasonal_offsets.is_empty() {
-                    0.0
-                } else {
-                    self.seasonal_offsets[(self.values.len() + step) % self.seasonal_offsets.len()]
-                };
-                self.last_value + self.slope * (step + 1) as f32 + seasonal
-            })
-            .collect()
+    fn decomposition(&self, horizon: usize) -> ForecastDecomposition {
+        let mut baseline = Vec::with_capacity(horizon);
+        let mut seasonal = Vec::with_capacity(horizon);
+        let mut event = Vec::with_capacity(horizon);
+        let mut residual = Vec::with_capacity(horizon);
+        for step in 0..horizon {
+            baseline.push(self.last_value + self.slope * (step + 1) as f32);
+            seasonal.push(self.seasonal_at(step));
+            event.push(self.event_impulse * (-(step as f32) / 3.0).exp());
+            residual.push(0.0);
+        }
+        ForecastDecomposition {
+            baseline,
+            seasonal,
+            event,
+            residual,
+        }
     }
 
-    fn prediction_intervals(
-        &self,
-        point: &[f32],
-        enforce_constraints: bool,
-    ) -> BTreeMap<String, PredictionInterval> {
+    fn prediction_intervals(&self, point: &[f32]) -> BTreeMap<String, PredictionInterval> {
         let mut intervals = BTreeMap::new();
         for (coverage, score) in [("80", 1.2816_f32), ("95", 1.96_f32)] {
-            let (mut lower, mut upper): (Vec<f32>, Vec<f32>) = point
+            let (lower, upper): (Vec<f32>, Vec<f32>) = point
                 .iter()
                 .enumerate()
                 .map(|(index, value)| {
@@ -147,22 +185,18 @@ impl SeriesProfile {
                     (value - spread, value + spread)
                 })
                 .unzip();
-            if enforce_constraints && self.values.iter().all(|value| *value >= 0.0) {
-                clamp_nonnegative(&mut lower);
-                clamp_nonnegative(&mut upper);
-            }
             intervals.insert(coverage.into(), PredictionInterval { lower, upper });
         }
         intervals
     }
 
-    fn scenarios(&self, point: &[f32], count: usize, enforce_constraints: bool) -> Vec<Vec<f32>> {
+    fn scenarios(&self, point: &[f32], count: usize) -> Vec<Vec<f32>> {
         let count = count.max(1);
         (0..count)
             .map(|scenario| {
                 let centered = scenario as f32 - (count.saturating_sub(1)) as f32 / 2.0;
                 let phase = (scenario + 1) as f32 * 0.73;
-                let mut path = point
+                point
                     .iter()
                     .enumerate()
                     .map(|(step, point)| {
@@ -171,13 +205,55 @@ impl SeriesProfile {
                         let wave = ((step + 1) as f32 * phase).sin() * self.residual_scale * 0.25;
                         point + drift + wave
                     })
-                    .collect::<Vec<_>>();
-                if enforce_constraints && self.values.iter().all(|value| *value >= 0.0) {
-                    clamp_nonnegative(&mut path);
-                }
-                path
+                    .collect::<Vec<_>>()
             })
             .collect()
+    }
+
+    fn distribution(&self, horizon: usize) -> DistributionForecast {
+        DistributionForecast {
+            family: "student_t".into(),
+            location: sum_decomposition(&self.decomposition(horizon)),
+            scale: (0..horizon)
+                .map(|index| self.residual_scale * ((index + 1) as f32).sqrt())
+                .collect(),
+            degrees_of_freedom: Some(7.0),
+        }
+    }
+
+    fn regime_timeline(&self, horizon: usize) -> Vec<RegimeStep> {
+        let primary = self.primary_regime();
+        let change_point_probability = self.change_point_probability();
+        let volatility_state = if self.volatility_ratio > 0.25 {
+            "expanding"
+        } else if self.volatility_ratio < 0.05 {
+            "compressed"
+        } else {
+            "normal"
+        };
+        (0..horizon)
+            .map(|horizon_index| RegimeStep {
+                horizon_index,
+                label: if horizon_index > 0 && change_point_probability > 0.55 {
+                    "transition_risk".into()
+                } else {
+                    primary.clone()
+                },
+                probability: (1.0
+                    - change_point_probability * horizon_index as f32 / horizon.max(1) as f32)
+                    .clamp(0.05, 1.0),
+                change_point_probability,
+                volatility_state: volatility_state.into(),
+            })
+            .collect()
+    }
+
+    fn seasonal_at(&self, step: usize) -> f32 {
+        if self.seasonal_offsets.is_empty() {
+            0.0
+        } else {
+            self.seasonal_offsets[(self.values.len() + step) % self.seasonal_offsets.len()]
+        }
     }
 
     fn regime_probabilities(&self) -> BTreeMap<String, f32> {
@@ -274,6 +350,21 @@ fn estimate_residual_scale(values: &[f32], slope: f32) -> f32 {
     std_dev(&residuals).max(std_dev(values) * 0.05)
 }
 
+fn estimate_event_impulse(values: &[f32], slope: f32, residual_scale: f32) -> f32 {
+    if values.len() < 3 {
+        return 0.0;
+    }
+    let previous = values[values.len() - 2];
+    let observed = values[values.len() - 1];
+    let expected = previous + slope;
+    let residual = observed - expected;
+    if residual.abs() > residual_scale * 1.5 {
+        residual * 0.5
+    } else {
+        0.0
+    }
+}
+
 fn estimate_seasonal_offsets(values: &[f32], period: Option<usize>) -> Vec<f32> {
     let Some(period) = period else {
         return vec![];
@@ -338,10 +429,101 @@ fn normalize_probs(mut values: BTreeMap<String, f32>) -> BTreeMap<String, f32> {
     values
 }
 
-fn clamp_nonnegative(values: &mut [f32]) {
-    for value in values {
-        if *value < 0.0 {
-            *value = 0.0;
+fn sum_decomposition(decomposition: &ForecastDecomposition) -> Vec<f32> {
+    let len = decomposition
+        .baseline
+        .len()
+        .max(decomposition.seasonal.len())
+        .max(decomposition.event.len())
+        .max(decomposition.residual.len());
+    (0..len)
+        .map(|index| {
+            decomposition
+                .baseline
+                .get(index)
+                .copied()
+                .unwrap_or_default()
+                + decomposition
+                    .seasonal
+                    .get(index)
+                    .copied()
+                    .unwrap_or_default()
+                + decomposition.event.get(index).copied().unwrap_or_default()
+                + decomposition
+                    .residual
+                    .get(index)
+                    .copied()
+                    .unwrap_or_default()
+        })
+        .collect()
+}
+
+fn build_projection(options: &ForecastOptions, values: &[f32]) -> Option<ForecastConstraints> {
+    let mut constraints = options.constraints.clone();
+    if options.enforce_constraints && values.iter().all(|value| *value >= 0.0) {
+        constraints.non_negative = true;
+    }
+    (options.enforce_constraints || constraints.has_any()).then_some(constraints)
+}
+
+#[derive(Clone, Debug)]
+struct ImputedHistory {
+    values: Vec<f32>,
+    has_missing: bool,
+}
+
+fn impute_history(values: &[f32]) -> ImputedHistory {
+    if values.is_empty() {
+        return ImputedHistory {
+            values: vec![0.0],
+            has_missing: false,
+        };
+    }
+    let mut imputed = values.to_vec();
+    let has_missing = imputed.iter().any(|value| !value.is_finite());
+    let mut index = 0;
+    while index < imputed.len() {
+        if imputed[index].is_finite() {
+            index += 1;
+            continue;
         }
+        let start = index;
+        while index < imputed.len() && !imputed[index].is_finite() {
+            index += 1;
+        }
+        let end = index;
+        let left = start
+            .checked_sub(1)
+            .and_then(|left| imputed.get(left))
+            .copied();
+        let right = imputed.get(end).copied();
+        match (left, right) {
+            (Some(left), Some(right)) if left.is_finite() && right.is_finite() => {
+                let span = (end - start + 1) as f32;
+                for (offset, value) in imputed[start..end].iter_mut().enumerate() {
+                    let weight = (offset + 1) as f32 / span;
+                    *value = left + (right - left) * weight;
+                }
+            }
+            (Some(left), _) if left.is_finite() => {
+                for value in &mut imputed[start..end] {
+                    *value = left;
+                }
+            }
+            (_, Some(right)) if right.is_finite() => {
+                for value in &mut imputed[start..end] {
+                    *value = right;
+                }
+            }
+            _ => {
+                for value in &mut imputed[start..end] {
+                    *value = 0.0;
+                }
+            }
+        }
+    }
+    ImputedHistory {
+        values: imputed,
+        has_missing,
     }
 }

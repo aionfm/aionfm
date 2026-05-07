@@ -41,16 +41,19 @@ where
             let response = self.forecast_one(ForecastRequest::new(entity, options.clone()))?;
             results.extend(response.results);
         }
-        Ok(ForecastResponse::new(
-            self.model.model_name(),
-            self.model.model_version(),
-            results,
-        ))
+        let response =
+            ForecastResponse::new(self.model.model_name(), self.model.model_version(), results);
+        self.metrics.record_response(&response);
+        Ok(response)
     }
 
     pub fn scenario(&self, request: ScenarioRequest) -> AionResult<ForecastResponse> {
         let mut forecast = self.forecast_batch(request.forecast)?;
-        self.sampler.ensure_scenarios(&mut forecast);
+        self.sampler.apply_controls(
+            &mut forecast,
+            request.scenario_type.as_deref(),
+            &request.forced_regimes,
+        );
         Ok(forecast)
     }
 

@@ -33,6 +33,8 @@ pub struct ForecastOptions {
     #[serde(default)]
     pub enforce_constraints: bool,
     #[serde(default)]
+    pub constraints: ForecastConstraints,
+    #[serde(default)]
     pub use_retrieval: bool,
 }
 
@@ -45,6 +47,7 @@ impl Default for ForecastOptions {
             return_regimes: false,
             return_scenarios: false,
             enforce_constraints: false,
+            constraints: ForecastConstraints::default(),
             use_retrieval: false,
         }
     }
@@ -112,6 +115,7 @@ impl BatchForecastRequest {
             return_regimes: self.options.return_regimes,
             return_scenarios: self.options.return_scenarios,
             enforce_constraints: self.options.enforce_constraints,
+            constraints: self.options.constraints.clone(),
             use_retrieval: self.options.use_retrieval,
         }
     }
@@ -127,7 +131,39 @@ pub struct RequestOptions {
     #[serde(default)]
     pub enforce_constraints: bool,
     #[serde(default)]
+    pub constraints: ForecastConstraints,
+    #[serde(default)]
     pub use_retrieval: bool,
+}
+
+/// Constraint hints used by constraint-aware decoding and post-processing.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ForecastConstraints {
+    #[serde(default)]
+    pub non_negative: bool,
+    #[serde(default)]
+    pub min_value: Option<f32>,
+    #[serde(default)]
+    pub max_value: Option<f32>,
+    #[serde(default)]
+    pub monotonic_non_decreasing: bool,
+    #[serde(default)]
+    pub integer: bool,
+    #[serde(default)]
+    pub closed_horizon_indices: Vec<usize>,
+    #[serde(default)]
+    pub closed_value: Option<f32>,
+}
+
+impl ForecastConstraints {
+    pub fn has_any(&self) -> bool {
+        self.non_negative
+            || self.min_value.is_some()
+            || self.max_value.is_some()
+            || self.monotonic_non_decreasing
+            || self.integer
+            || !self.closed_horizon_indices.is_empty()
+    }
 }
 
 /// Prediction interval bounds for a coverage level.
@@ -135,6 +171,45 @@ pub struct RequestOptions {
 pub struct PredictionInterval {
     pub lower: Vec<f32>,
     pub upper: Vec<f32>,
+}
+
+/// Interpretable additive decomposition of a forecast trajectory.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ForecastDecomposition {
+    pub baseline: Vec<f32>,
+    pub seasonal: Vec<f32>,
+    pub event: Vec<f32>,
+    pub residual: Vec<f32>,
+}
+
+/// Parametric distribution summary for each forecast horizon.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DistributionForecast {
+    pub family: String,
+    pub location: Vec<f32>,
+    pub scale: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub degrees_of_freedom: Option<f32>,
+}
+
+/// Future regime trajectory summary for interpretability and scenario exploration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RegimeStep {
+    pub horizon_index: usize,
+    pub label: String,
+    pub probability: f32,
+    pub change_point_probability: f32,
+    pub volatility_state: String,
+}
+
+/// Summary of constraint projection work applied to a response.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConstraintReport {
+    pub applied: bool,
+    #[serde(default)]
+    pub adjusted_points: usize,
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 /// Human-readable interpretability summary.
@@ -162,9 +237,19 @@ pub struct EntityForecast {
     #[serde(default)]
     pub prediction_intervals: BTreeMap<String, PredictionInterval>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decomposition: Option<ForecastDecomposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<DistributionForecast>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imputed_history: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scenario_paths: Option<Vec<Vec<f32>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regime_probabilities: Option<BTreeMap<String, f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regime_timeline: Option<Vec<RegimeStep>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint_report: Option<ConstraintReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explanation: Option<Explanation>,
     #[serde(default)]
@@ -262,4 +347,6 @@ pub struct ServiceStatus {
     pub p50_latency_ms: Option<f32>,
     #[serde(default)]
     pub p95_latency_ms: Option<f32>,
+    #[serde(default)]
+    pub metrics: BTreeMap<String, f32>,
 }

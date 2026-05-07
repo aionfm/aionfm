@@ -53,4 +53,53 @@ impl ScenarioSampler {
             }
         }
     }
+
+    pub fn apply_controls(
+        &self,
+        response: &mut ForecastResponse,
+        scenario_type: Option<&str>,
+        forced_regimes: &[String],
+    ) {
+        self.ensure_scenarios(response);
+        let multiplier = match scenario_type.unwrap_or("median") {
+            "optimistic" => 0.85,
+            "conservative" => 1.10,
+            "tail-risk" | "stress" => 1.35,
+            _ => 1.0,
+        };
+        for result in &mut response.results {
+            if let Some(paths) = &mut result.scenario_paths {
+                for (path_index, path) in paths.iter_mut().enumerate() {
+                    let center = result
+                        .point_forecast
+                        .get(path_index % result.point_forecast.len().max(1))
+                        .copied()
+                        .unwrap_or_default();
+                    for value in path {
+                        *value = center + (*value - center) * multiplier;
+                    }
+                }
+            }
+            if !forced_regimes.is_empty() {
+                let timeline = result.regime_timeline.get_or_insert_with(|| {
+                    (0..result.forecast_horizon)
+                        .map(|horizon_index| aionfm_utils::RegimeStep {
+                            horizon_index,
+                            label: "forced".into(),
+                            probability: 1.0,
+                            change_point_probability: 0.0,
+                            volatility_state: "controlled".into(),
+                        })
+                        .collect()
+                });
+                for (index, regime) in forced_regimes.iter().enumerate() {
+                    if let Some(step) = timeline.get_mut(index) {
+                        step.label = regime.clone();
+                        step.probability = 1.0;
+                        step.change_point_probability = 1.0;
+                    }
+                }
+            }
+        }
+    }
 }
