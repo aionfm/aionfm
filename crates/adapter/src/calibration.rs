@@ -129,6 +129,7 @@ mod tests {
             regime_probabilities: None,
             regime_timeline: None,
             constraint_report: None,
+            retrieval_matches: None,
             explanation: None,
             metadata: BTreeMap::new(),
         };

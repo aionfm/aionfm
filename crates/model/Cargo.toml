@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+aionfm-retrieval.workspace = true
 aionfm-tokenization.workspace = true
 aionfm-utils.workspace = true
 async-trait.workspace = true

@@ -1,4 +1,5 @@
 use crate::{AionError, AionResult, BatchForecastRequest, ForecastOptions, QuantileLevel};
+use std::collections::BTreeSet;
 
 pub fn validate_forecast_options(options: &ForecastOptions) -> AionResult<()> {
     validate_horizon(options.horizon)?;
@@ -33,6 +34,63 @@ pub fn validate_batch_request(request: &BatchForecastRequest) -> AionResult<()> 
                 "entity {} requires historical_values",
                 entity.entity_id
             )));
+        }
+    }
+    validate_hierarchy(request)?;
+    Ok(())
+}
+
+fn validate_hierarchy(request: &BatchForecastRequest) -> AionResult<()> {
+    let Some(hierarchy) = &request.options.hierarchy else {
+        return Ok(());
+    };
+    let entity_ids = request
+        .entities
+        .iter()
+        .map(|entity| entity.entity_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for relation in &hierarchy.relations {
+        if relation.parent_entity_id.trim().is_empty() {
+            return Err(AionError::Validation(
+                "hierarchy parent_entity_id must not be empty".into(),
+            ));
+        }
+        if !entity_ids.contains(relation.parent_entity_id.as_str()) {
+            return Err(AionError::Validation(format!(
+                "hierarchy parent {} is not present in the forecast batch",
+                relation.parent_entity_id
+            )));
+        }
+        if relation.child_entity_ids.is_empty() {
+            return Err(AionError::Validation(format!(
+                "hierarchy parent {} requires at least one child",
+                relation.parent_entity_id
+            )));
+        }
+        let mut children = BTreeSet::new();
+        for child in &relation.child_entity_ids {
+            if child.trim().is_empty() {
+                return Err(AionError::Validation(
+                    "hierarchy child_entity_ids must not contain empty IDs".into(),
+                ));
+            }
+            if child == &relation.parent_entity_id {
+                return Err(AionError::Validation(format!(
+                    "hierarchy parent {} cannot include itself as a child",
+                    relation.parent_entity_id
+                )));
+            }
+            if !entity_ids.contains(child.as_str()) {
+                return Err(AionError::Validation(format!(
+                    "hierarchy child {child} is not present in the forecast batch"
+                )));
+            }
+            if !children.insert(child.as_str()) {
+                return Err(AionError::Validation(format!(
+                    "hierarchy child {child} is duplicated under parent {}",
+                    relation.parent_entity_id
+                )));
+            }
         }
     }
     Ok(())
@@ -99,5 +157,34 @@ mod tests {
             ..Default::default()
         };
         assert!(validate_forecast_options(&options).is_err());
+    }
+
+    #[test]
+    fn rejects_hierarchy_children_missing_from_batch() {
+        let request = BatchForecastRequest {
+            entities: vec![crate::ForecastEntity {
+                entity_id: "parent".into(),
+                target: "value".into(),
+                historical_values: vec![1.0],
+                frequency: Default::default(),
+                covariates: vec![],
+                metadata: Default::default(),
+            }],
+            horizon: 1,
+            options: crate::RequestOptions {
+                hierarchy: Some(crate::HierarchySpec {
+                    relations: vec![crate::HierarchyRelation {
+                        parent_entity_id: "parent".into(),
+                        child_entity_ids: vec!["missing".into()],
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            quantiles: vec![QuantileLevel::Q50],
+            request_id: Default::default(),
+            scenario_count: None,
+        };
+        assert!(validate_batch_request(&request).is_err());
     }
 }

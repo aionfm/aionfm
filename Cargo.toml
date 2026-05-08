@@ -4,6 +4,7 @@ members = [
     "crates/data",
     "crates/tokenization",
     "crates/model",
+    "crates/retrieval",
     "crates/training",
     "crates/adapter",
     "crates/serving",
@@ -21,6 +22,7 @@ repository = "https://github.com/dust-llc/aionfm"
 aionfm-adapter = { path = "crates/adapter" }
 aionfm-data = { path = "crates/data" }
 aionfm-model = { path = "crates/model" }
+aionfm-retrieval = { path = "crates/retrieval" }
 aionfm-serving = { path = "crates/serving" }
 aionfm-tokenization = { path = "crates/tokenization" }
 aionfm-training = { path = "crates/training" }

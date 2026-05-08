@@ -30,11 +30,21 @@ dependencies = [
 name = "aionfm-model"
 version = "0.1.0"
 dependencies = [
+ "aionfm-retrieval",
  "aionfm-tokenization",
  "aionfm-utils",
  "async-trait",
  "serde",
  "tracing",
+]
+
+[[package]]
+name = "aionfm-retrieval"
+version = "0.1.0"
+dependencies = [
+ "aionfm-utils",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

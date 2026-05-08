@@ -1,0 +1,13 @@
+[package]
+name = "aionfm-retrieval"
+description = "Retrieval-augmented temporal search interfaces for AionFM."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+aionfm-utils.workspace = true
+serde.workspace = true
+thiserror.workspace = true

@@ -1,8 +1,8 @@
-use crate::{InferenceMetrics, ScenarioSampler};
+use crate::{ForecastEvaluator, HierarchicalReconciler, InferenceMetrics, ScenarioSampler};
 use aionfm_model::ForecastModel;
 use aionfm_utils::{
-    validation::validate_batch_request, AionResult, BatchForecastRequest, ForecastRequest,
-    ForecastResponse, InterpretationRequest, ScenarioRequest,
+    validation::validate_batch_request, AionResult, BatchForecastRequest, EvaluationReport,
+    EvaluationRequest, ForecastRequest, ForecastResponse, InterpretationRequest, ScenarioRequest,
 };
 use std::sync::Arc;
 
@@ -12,6 +12,8 @@ pub struct InferenceEngine<M> {
     model: Arc<M>,
     metrics: InferenceMetrics,
     sampler: ScenarioSampler,
+    reconciler: HierarchicalReconciler,
+    evaluator: ForecastEvaluator,
 }
 
 impl<M> InferenceEngine<M>
@@ -23,6 +25,8 @@ where
             model: Arc::new(model),
             metrics: InferenceMetrics::default(),
             sampler: ScenarioSampler::default(),
+            reconciler: HierarchicalReconciler,
+            evaluator: ForecastEvaluator::default(),
         }
     }
 
@@ -41,8 +45,11 @@ where
             let response = self.forecast_one(ForecastRequest::new(entity, options.clone()))?;
             results.extend(response.results);
         }
-        let response =
+        let mut response =
             ForecastResponse::new(self.model.model_name(), self.model.model_version(), results);
+        if let Some(hierarchy) = &request.options.hierarchy {
+            self.reconciler.reconcile(&mut response, hierarchy);
+        }
         self.metrics.record_response(&response);
         Ok(response)
     }
@@ -59,6 +66,12 @@ where
 
     pub fn interpretation(&self, request: InterpretationRequest) -> AionResult<ForecastResponse> {
         self.forecast_batch(request.forecast)
+    }
+
+    pub fn evaluate(&self, request: EvaluationRequest) -> AionResult<EvaluationReport> {
+        let report = self.evaluator.evaluate(&request);
+        self.metrics.record_evaluation(&report);
+        Ok(report)
     }
 
     pub fn metrics(&self) -> InferenceMetrics {

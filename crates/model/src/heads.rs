@@ -1,7 +1,8 @@
 use crate::{enforce_quantile_monotonicity, merge_reports, ConstraintProjector};
+use aionfm_retrieval::{InMemoryRetrievalIndex, RetrievalIndex, RetrievalQuery};
 use aionfm_utils::{
     DistributionForecast, EntityForecast, Explanation, ForecastConstraints, ForecastDecomposition,
-    ForecastEntity, ForecastOptions, Frequency, PredictionInterval, RegimeStep,
+    ForecastEntity, ForecastOptions, Frequency, PredictionInterval, RegimeStep, RetrievalMatch,
 };
 use std::collections::BTreeMap;
 
@@ -86,6 +87,15 @@ impl ForecastHeads {
         let regime_timeline = options
             .return_regimes
             .then(|| profile.regime_timeline(options.horizon));
+        let retrieval_matches = options.use_retrieval.then(|| {
+            retrieval_matches(
+                &entity.entity_id,
+                &entity.target,
+                &profile.values,
+                options.horizon,
+                &profile.primary_regime(),
+            )
+        });
         let current_regime = profile.primary_regime();
         let constraint_report = merge_reports(reports);
         EntityForecast {
@@ -103,6 +113,7 @@ impl ForecastHeads {
             regime_probabilities,
             regime_timeline,
             constraint_report,
+            retrieval_matches,
             explanation: Some(Explanation {
                 current_regime: Some(current_regime),
                 uncertainty_driver: Some(profile.uncertainty_driver()),
@@ -464,6 +475,37 @@ fn build_projection(options: &ForecastOptions, values: &[f32]) -> Option<Forecas
         constraints.non_negative = true;
     }
     (options.enforce_constraints || constraints.has_any()).then_some(constraints)
+}
+
+fn retrieval_matches(
+    entity_id: &str,
+    target: &str,
+    values: &[f32],
+    horizon: usize,
+    regime_label: &str,
+) -> Vec<RetrievalMatch> {
+    if values.len() < 8 {
+        return vec![];
+    }
+    let window_len = values.len().min(16).max(4) / 2;
+    let mut index = InMemoryRetrievalIndex::new();
+    if index
+        .index_series(
+            entity_id,
+            target,
+            values,
+            window_len,
+            horizon,
+            Some(regime_label),
+        )
+        .is_err()
+    {
+        return vec![];
+    }
+    let query = values[values.len() - window_len..].to_vec();
+    index
+        .search(&RetrievalQuery::in_entity(entity_id, query, horizon).top_k(3))
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Debug)]

@@ -134,6 +134,8 @@ pub struct RequestOptions {
     pub constraints: ForecastConstraints,
     #[serde(default)]
     pub use_retrieval: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hierarchy: Option<HierarchySpec>,
 }
 
 /// Constraint hints used by constraint-aware decoding and post-processing.
@@ -212,6 +214,60 @@ pub struct ConstraintReport {
     pub notes: Vec<String>,
 }
 
+/// Hierarchical reconciliation strategy.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconciliationMethod {
+    BottomUp,
+    TopDown,
+    MiddleOut,
+}
+
+impl Default for ReconciliationMethod {
+    fn default() -> Self {
+        Self::BottomUp
+    }
+}
+
+/// Parent-child relationship for hierarchical forecasting.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct HierarchyRelation {
+    pub parent_entity_id: String,
+    pub child_entity_ids: Vec<String>,
+}
+
+/// Batch-level hierarchy definition used by serving post-processing.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct HierarchySpec {
+    #[serde(default)]
+    pub method: ReconciliationMethod,
+    #[serde(default)]
+    pub relations: Vec<HierarchyRelation>,
+}
+
+/// Reconciliation summary for aggregate coherence.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ReconciliationReport {
+    pub method: ReconciliationMethod,
+    #[serde(default)]
+    pub adjusted_entities: Vec<String>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+/// Retrieved historical analog used for interpretation and retrieval-augmented forecasts.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RetrievalMatch {
+    pub source_entity_id: String,
+    pub start_index: usize,
+    pub window_len: usize,
+    pub similarity: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regime_label: Option<String>,
+    #[serde(default)]
+    pub outcome_preview: Vec<f32>,
+}
+
 /// Human-readable interpretability summary.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Explanation {
@@ -251,6 +307,8 @@ pub struct EntityForecast {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub constraint_report: Option<ConstraintReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval_matches: Option<Vec<RetrievalMatch>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explanation: Option<Explanation>,
     #[serde(default)]
     pub metadata: Metadata,
@@ -264,6 +322,8 @@ pub struct ForecastResponse {
     pub model_version: String,
     pub generated_at: DateTime<Utc>,
     pub results: Vec<EntityForecast>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciliation_report: Option<ReconciliationReport>,
 }
 
 impl ForecastResponse {
@@ -278,6 +338,116 @@ impl ForecastResponse {
             model_version: version.into(),
             generated_at: Utc::now(),
             results,
+            reconciliation_report: None,
+        }
+    }
+}
+
+/// Severity assigned to monitoring alerts.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+impl Default for AlertSeverity {
+    fn default() -> Self {
+        Self::Info
+    }
+}
+
+/// Alert emitted by evaluation or serving monitoring.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct MonitoringAlert {
+    pub severity: AlertSeverity,
+    pub metric: String,
+    pub message: String,
+    pub value: f32,
+    pub threshold: f32,
+}
+
+/// Observed values paired with an entity forecast for post-deployment evaluation.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EvaluationObservation {
+    pub entity_id: String,
+    pub observed: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_mae: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_rate: Option<f32>,
+}
+
+/// Request used by monitoring jobs to score a forecast after observations arrive.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EvaluationRequest {
+    pub forecast: ForecastResponse,
+    #[serde(default)]
+    pub observations: Vec<EvaluationObservation>,
+}
+
+/// Per-entity forecast quality metrics.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EntityEvaluation {
+    pub entity_id: String,
+    pub target: String,
+    pub horizon: usize,
+    pub compared_points: usize,
+    pub mae: f32,
+    pub rmse: f32,
+    pub smape: f32,
+    pub wape: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mase: Option<f32>,
+    #[serde(default)]
+    pub quantile_pinball_loss: BTreeMap<String, f32>,
+    #[serde(default)]
+    pub quantile_coverage: BTreeMap<String, f32>,
+    #[serde(default)]
+    pub interval_coverage: BTreeMap<String, f32>,
+    #[serde(default)]
+    pub interval_width: BTreeMap<String, f32>,
+}
+
+/// Evaluation summary for accuracy, calibration, intervals, and drift indicators.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EvaluationReport {
+    pub report_id: Uuid,
+    pub generated_at: DateTime<Utc>,
+    pub model: String,
+    pub model_version: String,
+    pub entity_count: usize,
+    pub observation_count: usize,
+    #[serde(default)]
+    pub entities: Vec<EntityEvaluation>,
+    #[serde(default)]
+    pub metrics: BTreeMap<String, f32>,
+    #[serde(default)]
+    pub alerts: Vec<MonitoringAlert>,
+}
+
+impl EvaluationReport {
+    pub fn new(
+        model: impl Into<String>,
+        version: impl Into<String>,
+        entities: Vec<EntityEvaluation>,
+        metrics: BTreeMap<String, f32>,
+        alerts: Vec<MonitoringAlert>,
+    ) -> Self {
+        let observation_count = entities.iter().map(|entity| entity.compared_points).sum();
+        Self {
+            report_id: Uuid::new_v4(),
+            generated_at: Utc::now(),
+            model: model.into(),
+            model_version: version.into(),
+            entity_count: entities.len(),
+            observation_count,
+            entities,
+            metrics,
+            alerts,
         }
     }
 }
@@ -349,4 +519,6 @@ pub struct ServiceStatus {
     pub p95_latency_ms: Option<f32>,
     #[serde(default)]
     pub metrics: BTreeMap<String, f32>,
+    #[serde(default)]
+    pub alerts: Vec<MonitoringAlert>,
 }
