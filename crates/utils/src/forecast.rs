@@ -2,6 +2,8 @@ use crate::types::{CovariateSeries, EntityMetadata, Frequency, Metadata};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
+use std::str::FromStr;
 use uuid::Uuid;
 
 /// Quantile level requested by clients. Values must be in `(0, 1)`.
@@ -59,6 +61,122 @@ impl ForecastOptions {
     }
 }
 
+/// Privacy mode requested for a forecast or monitoring operation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivacyMode {
+    Standard,
+    TenantIsolated,
+    Redacted,
+}
+
+impl Default for PrivacyMode {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+impl FromStr for PrivacyMode {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "standard" => Ok(Self::Standard),
+            "tenant_isolated" => Ok(Self::TenantIsolated),
+            "redacted" => Ok(Self::Redacted),
+            _ => Err(()),
+        }
+    }
+}
+
+impl fmt::Display for PrivacyMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Standard => "standard",
+            Self::TenantIsolated => "tenant_isolated",
+            Self::Redacted => "redacted",
+        };
+        formatter.write_str(value)
+    }
+}
+
+/// Governance context attached to API, SDK, serving, and audit operations.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RequestContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
+    #[serde(default)]
+    pub privacy_mode: PrivacyMode,
+}
+
+impl RequestContext {
+    pub fn is_empty(&self) -> bool {
+        self.tenant_id.is_none()
+            && self.actor_id.is_none()
+            && self.trace_id.is_none()
+            && self.purpose.is_none()
+            && self.privacy_mode == PrivacyMode::Standard
+    }
+
+    pub fn merge_headers(mut self, headers: RequestContext) -> Self {
+        if headers.tenant_id.is_some() {
+            self.tenant_id = headers.tenant_id;
+        }
+        if headers.actor_id.is_some() {
+            self.actor_id = headers.actor_id;
+        }
+        if headers.trace_id.is_some() {
+            self.trace_id = headers.trace_id;
+        }
+        if headers.purpose.is_some() {
+            self.purpose = headers.purpose;
+        }
+        if headers.privacy_mode != PrivacyMode::Standard {
+            self.privacy_mode = headers.privacy_mode;
+        }
+        self
+    }
+}
+
+/// Security audit event for API access and model operations.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuditEvent {
+    pub event_id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub operation: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+}
+
+impl AuditEvent {
+    pub fn new(
+        operation: impl Into<String>,
+        status: impl Into<String>,
+        context: Option<&RequestContext>,
+    ) -> Self {
+        Self {
+            event_id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            operation: operation.into(),
+            status: status.into(),
+            tenant_id: context.and_then(|context| context.tenant_id.clone()),
+            actor_id: context.and_then(|context| context.actor_id.clone()),
+            trace_id: context.and_then(|context| context.trace_id.clone()),
+        }
+    }
+}
+
 /// One entity in a batch forecast request.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ForecastEntity {
@@ -96,6 +214,8 @@ impl ForecastRequest {
 pub struct BatchForecastRequest {
     #[serde(default = "Uuid::new_v4")]
     pub request_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<RequestContext>,
     pub entities: Vec<ForecastEntity>,
     pub horizon: usize,
     #[serde(default = "ForecastOptions::default_quantiles")]
@@ -321,6 +441,8 @@ pub struct ForecastResponse {
     pub model: String,
     pub model_version: String,
     pub generated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<RequestContext>,
     pub results: Vec<EntityForecast>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reconciliation_report: Option<ReconciliationReport>,
@@ -337,6 +459,7 @@ impl ForecastResponse {
             model: model.into(),
             model_version: version.into(),
             generated_at: Utc::now(),
+            context: None,
             results,
             reconciliation_report: None,
         }
@@ -384,6 +507,8 @@ pub struct EvaluationObservation {
 /// Request used by monitoring jobs to score a forecast after observations arrive.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvaluationRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<RequestContext>,
     pub forecast: ForecastResponse,
     #[serde(default)]
     pub observations: Vec<EvaluationObservation>,
@@ -419,6 +544,8 @@ pub struct EvaluationReport {
     pub generated_at: DateTime<Utc>,
     pub model: String,
     pub model_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<RequestContext>,
     pub entity_count: usize,
     pub observation_count: usize,
     #[serde(default)]
@@ -443,6 +570,7 @@ impl EvaluationReport {
             generated_at: Utc::now(),
             model: model.into(),
             model_version: version.into(),
+            context: None,
             entity_count: entities.len(),
             observation_count,
             entities,
@@ -488,6 +616,8 @@ pub struct ModelDescriptor {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdaptationRequest {
     pub domain: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<RequestContext>,
     #[serde(default)]
     pub entities: Vec<ForecastEntity>,
     #[serde(default)]

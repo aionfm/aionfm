@@ -39,6 +39,7 @@ where
 
     pub fn forecast_batch(&self, request: BatchForecastRequest) -> AionResult<ForecastResponse> {
         validate_batch_request(&request)?;
+        let context = request.context.clone();
         let options = request.forecast_options();
         let mut results = Vec::with_capacity(request.entities.len());
         for entity in request.entities {
@@ -47,6 +48,7 @@ where
         }
         let mut response =
             ForecastResponse::new(self.model.model_name(), self.model.model_version(), results);
+        response.context = context;
         if let Some(hierarchy) = &request.options.hierarchy {
             self.reconciler.reconcile(&mut response, hierarchy);
         }
@@ -55,17 +57,38 @@ where
     }
 
     pub fn scenario(&self, request: ScenarioRequest) -> AionResult<ForecastResponse> {
+        let requested_count = request.forecast.scenario_count;
         let mut forecast = self.forecast_batch(request.forecast)?;
-        self.sampler.apply_controls(
+        self.sampler.apply_controls_with_count(
             &mut forecast,
             request.scenario_type.as_deref(),
             &request.forced_regimes,
+            requested_count,
         );
         Ok(forecast)
     }
 
-    pub fn interpretation(&self, request: InterpretationRequest) -> AionResult<ForecastResponse> {
-        self.forecast_batch(request.forecast)
+    pub fn interpretation(
+        &self,
+        mut request: InterpretationRequest,
+    ) -> AionResult<ForecastResponse> {
+        request.forecast.options.return_regimes = true;
+        let mut response = self.forecast_batch(request.forecast)?;
+        for result in &mut response.results {
+            if let Some(explanation) = &mut result.explanation {
+                if request.include_change_points {
+                    explanation.notes.push(
+                        "Change-point probabilities are included in the regime timeline.".into(),
+                    );
+                }
+                if request.include_attention_summary {
+                    explanation
+                        .notes
+                        .push("Attention summaries require a learned dual-stream backend.".into());
+                }
+            }
+        }
+        Ok(response)
     }
 
     pub fn evaluate(&self, request: EvaluationRequest) -> AionResult<EvaluationReport> {

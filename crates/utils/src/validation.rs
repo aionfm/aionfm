@@ -1,4 +1,6 @@
-use crate::{AionError, AionResult, BatchForecastRequest, ForecastOptions, QuantileLevel};
+use crate::{
+    AionError, AionResult, BatchForecastRequest, ForecastOptions, QuantileLevel, RequestContext,
+};
 use std::collections::BTreeSet;
 
 pub fn validate_forecast_options(options: &ForecastOptions) -> AionResult<()> {
@@ -17,6 +19,7 @@ pub fn validate_forecast_options(options: &ForecastOptions) -> AionResult<()> {
 
 pub fn validate_batch_request(request: &BatchForecastRequest) -> AionResult<()> {
     validate_forecast_options(&request.forecast_options())?;
+    validate_request_context(request.context.as_ref())?;
     if request.entities.is_empty() {
         return Err(AionError::Validation(
             "at least one entity is required".into(),
@@ -37,6 +40,41 @@ pub fn validate_batch_request(request: &BatchForecastRequest) -> AionResult<()> 
         }
     }
     validate_hierarchy(request)?;
+    Ok(())
+}
+
+pub fn validate_request_context(context: Option<&RequestContext>) -> AionResult<()> {
+    let Some(context) = context else {
+        return Ok(());
+    };
+    validate_context_field("tenant_id", context.tenant_id.as_deref())?;
+    validate_context_field("actor_id", context.actor_id.as_deref())?;
+    validate_context_field("trace_id", context.trace_id.as_deref())?;
+    validate_context_field("purpose", context.purpose.as_deref())?;
+    Ok(())
+}
+
+fn validate_context_field(name: &str, value: Option<&str>) -> AionResult<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if value.trim().is_empty() {
+        return Err(AionError::Validation(format!(
+            "request context {name} must not be empty"
+        )));
+    }
+    if value.len() > 128 {
+        return Err(AionError::Validation(format!(
+            "request context {name} must be 128 characters or fewer"
+        )));
+    }
+    if !value.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | ':' | '/')
+    }) {
+        return Err(AionError::Validation(format!(
+            "request context {name} contains unsupported characters"
+        )));
+    }
     Ok(())
 }
 
@@ -170,6 +208,7 @@ mod tests {
                 covariates: vec![],
                 metadata: Default::default(),
             }],
+            context: None,
             horizon: 1,
             options: crate::RequestOptions {
                 hierarchy: Some(crate::HierarchySpec {
@@ -186,5 +225,14 @@ mod tests {
             scenario_count: None,
         };
         assert!(validate_batch_request(&request).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_tenant_context() {
+        assert!(validate_request_context(Some(&RequestContext {
+            tenant_id: Some(" ".into()),
+            ..Default::default()
+        }))
+        .is_err());
     }
 }

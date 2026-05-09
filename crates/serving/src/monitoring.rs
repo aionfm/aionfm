@@ -87,13 +87,18 @@ impl ForecastEvaluator {
         }
         let metrics = aggregate_metrics(&entities, &request.observations);
         let alerts = self.alerts(&metrics);
-        EvaluationReport::new(
+        let mut report = EvaluationReport::new(
             request.forecast.model.clone(),
             request.forecast.model_version.clone(),
             entities,
             metrics,
             alerts,
-        )
+        );
+        report.context = request
+            .context
+            .clone()
+            .or_else(|| request.forecast.context.clone());
+        report
     }
 
     fn alerts(&self, metrics: &BTreeMap<String, f32>) -> Vec<MonitoringAlert> {
@@ -483,6 +488,7 @@ mod tests {
     fn evaluator_computes_point_metrics() {
         let forecast = ForecastResponse::new("AionFM", "test", vec![entity()]);
         let report = ForecastEvaluator::default().evaluate(&EvaluationRequest {
+            context: None,
             forecast,
             observations: vec![EvaluationObservation {
                 entity_id: "entity".into(),
